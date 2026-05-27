@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Skibidi Toilet Defense - FPS Tower Defense</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <!-- Loading Screen -->
+    <div id="loading-screen">
+        <div class="loading-content">
+            <h1>SKIBIDI TOILET DEFENSE</h1>
+            <div class="loading-bar">
+                <div id="loading-progress"></div>
+            </div>
+            <p id="loading-text">Initializing game systems...</p>
+        </div>
+    </div>
+
+    <!-- Main Menu -->
+    <div id="menu-screen">
+        <div class="menu-content">
+            <h1>SKIBIDI TOILET DEFENSE</h1>
+            <p class="subtitle">Defend the Core. Survive the Waves.</p>
+            <button id="start-button" class="menu-button">START GAME</button>
+            <div class="instructions">
+                <h3>CONTROLS</h3>
+                <ul>
+                    <li><strong>WASD</strong> - Move on tower top</li>
+                    <li><strong>MOUSE</strong> - Look around</li>
+                    <li><strong>LEFT CLICK</strong> - Shoot</li>
+                    <li><strong>ESC</strong> - Pause</li>
+                </ul>
+                <p style="margin-top: 10px; font-size: 0.9em; color: #FFD700;">Defend the tower from above!</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Game Canvas -->
+    <canvas id="game-canvas"></canvas>
+
+    <!-- HUD Overlay -->
+    <div id="hud" class="hidden">
+        <!-- Top HUD -->
+        <div id="top-hud">
+            <div class="hud-section">
+                <div class="label">BASE HEALTH</div>
+                <div class="health-bar-container">
+                    <div id="base-health-bar" class="health-bar"></div>
+                </div>
+                <div id="base-health-text" class="value">100</div>
+            </div>
+            <div class="hud-section center">
+                <div class="label">WAVE</div>
+                <div id="wave-number" class="value large">1</div>
+            </div>
+            <div class="hud-section">
+                <div class="label">AMMO</div>
+                <div id="ammo-count" class="value">∞</div>
+            </div>
+        </div>
+
+        <!-- Crosshair -->
+        <div id="crosshair">
+            <div class="crosshair-line horizontal"></div>
+            <div class="crosshair-line vertical"></div>
+            <div class="crosshair-dot"></div>
+        </div>
+
+        <!-- Bottom HUD -->
+        <div id="bottom-hud">
+            <div id="enemy-counter" class="hud-message">
+                Enemies: <span id="enemy-count">0</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Pause Menu -->
+    <div id="pause-menu" class="hidden">
+        <div class="menu-content">
+            <h2>PAUSED</h2>
+            <button id="resume-button" class="menu-button">RESUME</button>
+            <button id="restart-button" class="menu-button">RESTART</button>
+        </div>
+    </div>
+
+    <!-- Game Over Screen -->
+    <div id="gameover-screen" class="hidden">
+        <div class="menu-content">
+            <h1 id="gameover-title">GAME OVER</h1>
+            <p id="gameover-message" class="subtitle">The base has been destroyed!</p>
+            <div id="final-stats">
+                <p>Waves Survived: <span id="final-wave">0</span></p>
+                <p>Enemies Defeated: <span id="final-kills">0</span></p>
+            </div>
+            <button id="retry-button" class="menu-button">TRY AGAIN</button>
+        </div>
+    </div>
+
+    <!-- Victory Screen -->
+    <div id="victory-screen" class="hidden">
+        <div class="menu-content">
+            <h1 id="victory-title">VICTORY!</h1>
+            <p class="subtitle">You have defended the core!</p>
+            <div id="victory-stats">
+                <p>Total Waves: <span id="victory-waves">0</span></p>
+                <p>Total Kills: <span id="victory-kills">0</span></p>
+            </div>
+            <button id="play-again-button" class="menu-button">PLAY AGAIN</button>
+        </div>
+    </div>
+
+    <!-- Scripts - Load Three.js first, then our modules -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="js/scene.js?v=15"></script>
+    <script src="js/gameObjects.js?v=15"></script>
+    <script src="js/gameLogic.js?v=15"></script>
+    <script src="js/ui.js?v=15"></script>
+    <script src="js/game.js?v=15"></script>
+</body>
+</html>
