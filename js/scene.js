@@ -4,7 +4,7 @@
  */
 
 class SceneManager {
-    constructor() {
+    constructor(levelData = null) {
         this.scene = null;
         this.camera = null;
         this.renderer = null;
@@ -14,9 +14,12 @@ class SceneManager {
         this.arena = null;
         this.lights = [];
 
-        // Constants
-        this.ARENA_SIZE = 40;
-        this.ARENA_WALL_HEIGHT = 5;
+        // Level-driven config (falls back to defaults if no level passed)
+        const arena = (levelData && levelData.arena) || { size: 40, wallHeight: 5 };
+        this.ARENA_SIZE = arena.size;
+        this.ARENA_WALL_HEIGHT = arena.wallHeight;
+        this.levelLights = (levelData && levelData.lights) || [];
+        this.customProps = (levelData && levelData.customProps) || [];
     }
 
     /**
@@ -52,9 +55,13 @@ class SceneManager {
 
         // Setup lighting
         this.setupLighting();
+        this.addLevelLights();
 
         // Create arena
         this.createArena();
+
+        // Load any custom GLB props placed in the level editor
+        this.loadCustomProps();
 
         // Handle window resize
         window.addEventListener('resize', () => this.onWindowResize());
@@ -95,6 +102,67 @@ class SceneManager {
         centerLight.position.set(0, 5, 0);
         this.scene.add(centerLight);
         this.lights.push(centerLight);
+    }
+
+    /**
+     * Add designer-placed PointLights from levelData.json on top of the
+     * default atmospheric lighting.
+     */
+    addLevelLights() {
+        for (const l of this.levelLights) {
+            const colorInt = typeof l.color === 'string'
+                ? parseInt(l.color.replace(/^0x/i, ''), 16)
+                : (l.color ?? 0xffffff);
+            const light = new THREE.PointLight(colorInt, l.intensity ?? 1, l.distance ?? 0);
+            light.position.set(l.x ?? 0, l.y ?? 0, l.z ?? 0);
+            this.scene.add(light);
+            this.lights.push(light);
+        }
+    }
+
+    /**
+     * Load designer-placed GLB props from levelData.json. Resolves each
+     * asset filename to a URL via /api/asset-kits (kit_folder mapping).
+     * Best-effort: a missing asset logs a warning and skips that prop.
+     */
+    async loadCustomProps() {
+        if (!this.customProps || this.customProps.length === 0) return;
+
+        const LoaderCtor = (typeof THREE !== 'undefined' && THREE.GLTFLoader)
+            ? THREE.GLTFLoader
+            : (typeof GLTFLoader !== 'undefined' ? GLTFLoader : null);
+        if (!LoaderCtor) {
+            console.warn('GLTFLoader not available — skipping customProps.');
+            return;
+        }
+
+        let kitMap = {};
+        try {
+            const resp = await fetch('/api/asset-kits', { cache: 'no-store' });
+            if (resp.ok) kitMap = await resp.json();
+        } catch (_) { /* fall back to default kit folder */ }
+
+        const loader = new LoaderCtor();
+        for (const p of this.customProps) {
+            const kit = kitMap[p.asset] ?? 'props';
+            const url = `assets/${kit}/${p.asset}`;
+            loader.load(url, (gltf) => {
+                const node = gltf.scene;
+                node.position.set(p.x ?? 0, p.y ?? 0, p.z ?? 0);
+                node.rotation.set(p.rx ?? 0, p.ry ?? 0, p.rz ?? 0);
+                if (typeof p.sx === 'number' || typeof p.sy === 'number' || typeof p.sz === 'number') {
+                    node.scale.set(p.sx ?? 1, p.sy ?? 1, p.sz ?? 1);
+                } else {
+                    node.scale.setScalar(p.scale ?? 1);
+                }
+                node.traverse(c => {
+                    if (c.isMesh) { c.castShadow = true; c.receiveShadow = true; }
+                });
+                this.scene.add(node);
+            }, undefined, (err) => {
+                console.warn(`Failed to load custom prop ${p.id} (${url}):`, err);
+            });
+        }
     }
 
     /**

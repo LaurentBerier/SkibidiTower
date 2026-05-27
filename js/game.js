@@ -14,10 +14,12 @@ class Game {
         this.base = null;
         this.weapon = null;
 
-        // Player state - on tower top with movement
+        // Player state - on tower top with movement. The defaults match the
+        // original level layout; startGame() overwrites them from levelData.
         this.towerTopHeight = 8.2; // 6.5 (tower) + 1.7 (eye level)
         this.towerTopRadius = 2.0; // Safe movement radius on tower top
-        this.playerPosition = new THREE.Vector3(0, this.towerTopHeight, 0);
+        this.playerSpawn = new THREE.Vector3(0, this.towerTopHeight, 0);
+        this.playerPosition = this.playerSpawn.clone();
         this.playerVelocity = new THREE.Vector3();
         this.playerSpeed = 3; // Reduced speed for tower top
         this.mouseSensitivity = 0.002;
@@ -50,15 +52,26 @@ class Game {
         try {
             // Initialize UI
             this.uiManager = new UIManager();
-            this.uiManager.updateLoadingProgress(20, 'Loading UI...');
+            this.uiManager.updateLoadingProgress(10, 'Loading UI...');
+
+            // Pull the level config first so every downstream system can be
+            // built against the designer's chosen arena, base, and spawns.
+            this.uiManager.updateLoadingProgress(15, 'Loading level data...');
+            this.levelData = await LevelLoader.load();
+
+            // Apply spawn-derived player config
+            const ps = this.levelData.playerSpawn;
+            this.playerSpawn.set(ps.x, ps.y, ps.z);
+            this.towerTopHeight = ps.y;
+            this.towerTopRadius = Math.max(this.levelData.base.radius - 0.5, 0.5);
 
             // Initialize scene
-            this.sceneManager = new SceneManager();
+            this.sceneManager = new SceneManager(this.levelData);
             this.sceneManager.initialize();
             this.uiManager.updateLoadingProgress(40, 'Creating world...');
 
             // Create game objects
-            this.base = new DefenseBase(this.sceneManager);
+            this.base = new DefenseBase(this.sceneManager, this.levelData.base);
             this.uiManager.updateLoadingProgress(55, 'Initializing defense systems...');
 
             // Preload enemy model before any enemies can spawn (eliminates race condition)
@@ -73,7 +86,7 @@ class Game {
             this.uiManager.updateLoadingProgress(80, 'Loading weapons...');
 
             // Initialize game logic
-            this.gameLogic = new GameLogic(this.sceneManager, this.base);
+            this.gameLogic = new GameLogic(this.sceneManager, this.base, this.levelData);
             this.uiManager.updateLoadingProgress(88, 'Preparing battle systems...');
 
             // Setup input handlers
@@ -132,7 +145,7 @@ class Game {
         this.isPaused = false;
 
         // Position player on top of tower
-        this.playerPosition.set(0, this.towerTopHeight, 0);
+        this.playerPosition.copy(this.playerSpawn);
         this.pitch = 0;
         this.yaw = 0;
 
@@ -250,14 +263,18 @@ class Game {
         // Keep at tower top height
         newPosition.y = this.towerTopHeight;
 
-        // Constrain to tower top radius (prevent falling off)
-        const distanceFromCenter = Math.sqrt(newPosition.x * newPosition.x + newPosition.z * newPosition.z);
+        // Constrain to tower top radius (prevent falling off). Centre on the
+        // base's x/z so a designer-moved tower still keeps the player on top.
+        const baseX = this.base?.position?.x ?? 0;
+        const baseZ = this.base?.position?.z ?? 0;
+        const dx = newPosition.x - baseX;
+        const dz = newPosition.z - baseZ;
+        const distanceFromCenter = Math.sqrt(dx * dx + dz * dz);
 
         if (distanceFromCenter > this.towerTopRadius) {
-            // Player trying to go beyond edge - clamp to radius
-            const angle = Math.atan2(newPosition.z, newPosition.x);
-            newPosition.x = Math.cos(angle) * this.towerTopRadius;
-            newPosition.z = Math.sin(angle) * this.towerTopRadius;
+            const angle = Math.atan2(dz, dx);
+            newPosition.x = baseX + Math.cos(angle) * this.towerTopRadius;
+            newPosition.z = baseZ + Math.sin(angle) * this.towerTopRadius;
 
             // Stop velocity when hitting edge
             this.playerVelocity.x = 0;

@@ -4,9 +4,18 @@
  */
 
 class GameLogic {
-    constructor(scene, base) {
+    constructor(scene, base, levelData = null) {
         this.scene = scene;
         this.base = base;
+
+        // Designer-placed spawn points (x/z pairs). When empty the spawner
+        // falls back to a random angle around spawnRadius, matching the
+        // original gameplay.
+        this.enemySpawns = (levelData && levelData.enemySpawns) || [];
+        // Optional per-wave config (enemyCount, spawnInterval). When the
+        // array is shorter than the current wave number, the progressive
+        // difficulty curve below kicks in.
+        this.waveConfig = (levelData && levelData.waves) || [];
 
         // Wave system
         this.currentWave = 0;
@@ -73,8 +82,10 @@ class GameLogic {
         this.currentWave++;
         this.waveActive = true;
 
-        // Calculate enemies for this wave (progressive difficulty)
-        this.enemiesInWave = Math.floor(5 + this.currentWave * 2);
+        // Authored config wins; otherwise fall back to progressive curve.
+        const cfg = this.waveConfig[this.currentWave - 1];
+        this.enemiesInWave = cfg?.enemyCount ?? Math.floor(5 + this.currentWave * 2);
+        this.spawnInterval = cfg?.spawnInterval ?? this.spawnInterval;
         this.enemiesSpawned = 0;
         this.lastSpawnTime = Date.now() / 1000;
 
@@ -88,13 +99,20 @@ class GameLogic {
         if (this.enemies.length >= this.maxActiveEnemies) return;
         if (this.enemiesSpawned >= this.enemiesInWave) return;
 
-        // Random angle around arena
-        const angle = Math.random() * Math.PI * 2;
-        const spawnPos = new THREE.Vector3(
-            Math.cos(angle) * this.spawnRadius,
-            0,
-            Math.sin(angle) * this.spawnRadius
-        );
+        let spawnPos;
+        if (this.enemySpawns.length > 0) {
+            // Pick a random designer-placed spawn point.
+            const s = this.enemySpawns[Math.floor(Math.random() * this.enemySpawns.length)];
+            spawnPos = new THREE.Vector3(s.x, 0, s.z);
+        } else {
+            // Fallback: random angle around the legacy perimeter radius.
+            const angle = Math.random() * Math.PI * 2;
+            spawnPos = new THREE.Vector3(
+                Math.cos(angle) * this.spawnRadius,
+                0,
+                Math.sin(angle) * this.spawnRadius
+            );
+        }
 
         const enemy = new Enemy(this.scene, spawnPos, this.base.position);
         this.enemies.push(enemy);

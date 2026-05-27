@@ -7,12 +7,18 @@
  * DefenseBase - The central objective to defend
  */
 class DefenseBase {
-    constructor(scene) {
+    constructor(scene, config = null) {
         this.scene = scene;
-        this.maxHealth = 100;
+        const cfg = config || {};
+        this.maxHealth = cfg.maxHealth ?? 100;
         this.health = this.maxHealth;
         this.mesh = null;
-        this.position = new THREE.Vector3(0, 0, 0);
+        this.position = new THREE.Vector3(cfg.x ?? 0, cfg.y ?? 0, cfg.z ?? 0);
+        // Used by enemies (cylindrical collision) and the player (tower-top
+        // movement). Authoring these in the editor lets the same code drive
+        // a wider or taller tower without per-class tweaks.
+        this.collisionRadius = cfg.radius ?? 2.5;
+        this.height = cfg.height ?? 6.5;
 
         this.createMesh();
     }
@@ -106,14 +112,14 @@ class DefenseBase {
      * Get collision radius for the base
      */
     getCollisionRadius() {
-        return 2.5; // Bottom radius of the cylinder
+        return this.collisionRadius;
     }
 
     /**
      * Get the top height of the base
      */
     getTopHeight() {
-        return 6.5; // Top of the tower
+        return this.height;
     }
 }
 
