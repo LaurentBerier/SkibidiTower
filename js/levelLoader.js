@@ -12,7 +12,8 @@ const DEFAULT_LEVEL = {
     version: 1,
     arena: { size: 40, wallHeight: 5 },
     base: { x: 0, y: 0, z: 0, maxHealth: 100, radius: 2.5, height: 6.5 },
-    playerSpawn: { x: 0, y: 8.2, z: 0 },
+    enemyTower: { x: 0, y: 0, z: -16, radius: 5, height: 17 },
+    playerSpawn: { x: 0, y: 1.7, z: 0 },
     enemySpawns: [], // empty = game falls back to random perimeter spawns
     waves: [],
     lights: [],
@@ -37,7 +38,7 @@ class LevelLoader {
     // sections (arena, base, playerSpawn). Arrays replace wholesale.
     static _merge(defaults, override) {
         const out = { ...defaults, ...override };
-        for (const key of ['arena', 'base', 'playerSpawn']) {
+        for (const key of ['arena', 'base', 'enemyTower', 'playerSpawn']) {
             out[key] = { ...defaults[key], ...(override[key] ?? {}) };
         }
         return out;

@@ -1,32 +1,30 @@
 {
   "version": 1,
   "arena": {
-    "size": 40,
-    "wallHeight": 5
+    "size": 80,
+    "wallHeight": 7
   },
   "base": {
     "x": 0,
     "y": 0,
     "z": 0,
     "maxHealth": 100,
-    "radius": 2.5,
-    "height": 6.5
+    "radius": 3.6,
+    "height": 9
+  },
+  "enemyTower": {
+    "x": 0,
+    "y": 0,
+    "z": -34,
+    "radius": 5,
+    "height": 17
   },
   "playerSpawn": {
     "x": 0,
-    "y": 8.2,
-    "z": 0
+    "y": 1.7,
+    "z": 9
   },
-  "enemySpawns": [
-    { "id": "spawn_n",  "x": 0,       "z": -18 },
-    { "id": "spawn_ne", "x": 12.728,  "z": -12.728 },
-    { "id": "spawn_e",  "x": 18,      "z": 0 },
-    { "id": "spawn_se", "x": 12.728,  "z": 12.728 },
-    { "id": "spawn_s",  "x": 0,       "z": 18 },
-    { "id": "spawn_sw", "x": -12.728, "z": 12.728 },
-    { "id": "spawn_w",  "x": -18,     "z": 0 },
-    { "id": "spawn_nw", "x": -12.728, "z": -12.728 }
-  ],
+  "enemySpawns": [],
   "waves": [],
   "lights": [],
   "customProps": []

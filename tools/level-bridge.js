@@ -17,6 +17,7 @@ const DEFAULT_KIT_FOLDER = 'props';
 // Visual marker colors for editor-only objects.
 const ARENA_COLOR = 0x00aaff;
 const BASE_COLOR = 0xaaaaaa;
+const ENEMY_TOWER_COLOR = 0xff5522;
 const ENEMY_SPAWN_COLOR = 0xff0044;
 const PLAYER_SPAWN_COLOR = 0x00ffff;
 const LIGHT_HELPER_OPACITY = 0.6;
@@ -173,8 +174,25 @@ export async function importLevel(editor) {
         editor.addObject(mesh);
     }
 
-    // Player spawn — cyan octahedron at the tower top.
-    const ps = level.playerSpawn ?? { x: 0, y: 8.2, z: 0 };
+    // Enemy tower — orange cylinder placeholder showing the spire the horde
+    // spawns from. Resizing / moving it updates its footprint, height, and
+    // position on save.
+    const enemyTower = level.enemyTower ?? { x: 0, y: 0, z: -16, radius: 5, height: 17 };
+    {
+        const radius = enemyTower.radius ?? 5;
+        const height = enemyTower.height ?? 17;
+        const mesh = new THREE.Mesh(
+            new THREE.CylinderGeometry(radius * 0.55, radius, height, 8),
+            new THREE.MeshBasicMaterial({ color: ENEMY_TOWER_COLOR, wireframe: true })
+        );
+        mesh.position.set(enemyTower.x ?? 0, (enemyTower.y ?? 0) + height / 2, enemyTower.z ?? -16);
+        mesh.name = 'Enemy Tower';
+        mesh.userData = { kind: 'enemyTower' };
+        editor.addObject(mesh);
+    }
+
+    // Player spawn — cyan octahedron at ground eye height.
+    const ps = level.playerSpawn ?? { x: 0, y: 1.7, z: 0 };
     {
         const mesh = new THREE.Mesh(
             new THREE.OctahedronGeometry(0.6),
@@ -300,7 +318,8 @@ function buildLevelJson(editor) {
         version: unmapped.version ?? 1,
         arena: { size: 40, wallHeight: 5 },
         base: { x: 0, y: 0, z: 0, maxHealth: 100, radius: 2.5, height: 6.5 },
-        playerSpawn: { x: 0, y: 8.2, z: 0 },
+        enemyTower: { x: 0, y: 0, z: -16, radius: 5, height: 17 },
+        playerSpawn: { x: 0, y: 1.7, z: 0 },
         enemySpawns: [],
         waves: unmapped.waves ?? [],
         lights: [],
@@ -328,6 +347,16 @@ function buildLevelJson(editor) {
                 y: round(node.position.y - height / 2),
                 z: round(node.position.z),
                 maxHealth: node.userData.maxHealth ?? 100,
+                radius: round(params.radiusBottom * node.scale.x),
+                height,
+            };
+        } else if (k === 'enemyTower') {
+            const params = node.geometry?.parameters ?? { radiusTop: 2.75, radiusBottom: 5, height: 17 };
+            const height = round(params.height * node.scale.y);
+            out.enemyTower = {
+                x: round(node.position.x),
+                y: round(node.position.y - height / 2),
+                z: round(node.position.z),
                 radius: round(params.radiusBottom * node.scale.x),
                 height,
             };

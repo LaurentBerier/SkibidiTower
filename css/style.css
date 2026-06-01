@@ -224,7 +224,7 @@ body {
     background: rgba(32, 32, 32, 0.85);
     border: 2px solid #FF4500;
     padding: 15px 25px;
-    min-width: 200px;
+    min-width: 160px;
 }
 
 .hud-section.center {
@@ -265,6 +265,21 @@ body {
     width: 100%;
     background: linear-gradient(90deg, #00FF00 0%, #FFD700 50%, #FF4500 100%);
     transition: width 0.3s ease;
+}
+
+/* Player health bar reads cool/cyan to distinguish it from the tower bar. */
+.health-bar.player {
+    background: linear-gradient(90deg, #00E0FF 0%, #4CD964 60%, #FFD700 100%);
+}
+
+/* Full-screen red vignette flashed when the player takes damage. */
+#damage-overlay {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 150;
+    box-shadow: inset 0 0 220px 70px rgba(255, 0, 0, 0.55);
+    background: radial-gradient(ellipse at center, rgba(255, 0, 0, 0) 55%, rgba(255, 0, 0, 0.35) 100%);
 }
 
 /* Crosshair */
@@ -404,4 +419,81 @@ body {
 
 .low-health .health-bar {
     background: #FF0000 !important;
+}
+
+/* ───────── Tower-defense HUD ───────── */
+
+/* Coin counter (gold) */
+.value.coins {
+    color: #ffc62e;
+    text-shadow: 0 0 8px rgba(255, 198, 46, 0.55);
+}
+.value.coins::before {
+    content: "● ";
+    color: #ffc62e;
+    font-size: 0.8em;
+}
+
+/* View-toggle hint, bottom-right */
+#view-hint {
+    position: absolute;
+    bottom: 16px;
+    right: 18px;
+    padding: 6px 12px;
+    font-size: 14px;
+    letter-spacing: 1px;
+    color: #ffd770;
+    background: rgba(12, 14, 20, 0.6);
+    border: 1px solid rgba(255, 198, 46, 0.4);
+    border-radius: 4px;
+    pointer-events: none;
+    z-index: 120;
+}
+
+/* Build / overwatch panel */
+#build-panel {
+    position: absolute;
+    top: 50%;
+    right: 24px;
+    transform: translateY(-50%);
+    width: 280px;
+    padding: 18px 20px;
+    color: #e8e2d2;
+    background: rgba(10, 12, 18, 0.82);
+    border: 2px solid rgba(255, 198, 46, 0.55);
+    border-radius: 8px;
+    box-shadow: 0 0 24px rgba(0, 0, 0, 0.6), inset 0 0 18px rgba(255, 160, 40, 0.06);
+    z-index: 160;
+    pointer-events: none;
+}
+#build-panel h3 {
+    margin: 0 0 12px;
+    font-size: 16px;
+    letter-spacing: 2px;
+    color: #ffc62e;
+    text-shadow: 0 0 10px rgba(255, 198, 46, 0.5);
+}
+#build-panel .build-row {
+    font-size: 15px;
+    margin: 6px 0;
+}
+#build-panel .build-row span {
+    color: #fff;
+    font-weight: bold;
+}
+#build-panel .coin-ic { color: #ffc62e; }
+#build-hint {
+    margin-top: 12px;
+    font-size: 14px;
+    font-weight: bold;
+    min-height: 2.4em;
+    color: #8effa6;
+}
+#build-panel .build-foot {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+    font-size: 12px;
+    line-height: 1.4;
+    color: #9aa0ab;
 }

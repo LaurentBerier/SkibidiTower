@@ -16,9 +16,20 @@ class UIManager {
         // HUD elements
         this.baseHealthBar = document.getElementById('base-health-bar');
         this.baseHealthText = document.getElementById('base-health-text');
+        this.playerHealthBar = document.getElementById('player-health-bar');
+        this.playerHealthText = document.getElementById('player-health-text');
         this.waveNumber = document.getElementById('wave-number');
         this.ammoCount = document.getElementById('ammo-count');
+        this.weaponName = document.getElementById('weapon-name');
         this.enemyCount = document.getElementById('enemy-count');
+
+        // Tower-defense HUD
+        this.coinCount = document.getElementById('coin-count');
+        this.buildPanel = document.getElementById('build-panel');
+        this.buildCost = document.getElementById('build-cost');
+        this.buildSlots = document.getElementById('build-slots');
+        this.buildHint = document.getElementById('build-hint');
+        this.viewHint = document.getElementById('view-hint');
 
         // Buttons
         this.startButton = document.getElementById('start-button');
@@ -144,13 +155,27 @@ class UIManager {
      * Update HUD with game stats
      */
     updateHUD(stats) {
-        // Base health
+        // Base (tower) health
         const healthPercent = (stats.baseHealth / stats.maxBaseHealth) * 100;
         this.baseHealthBar.style.width = `${healthPercent}%`;
         this.baseHealthText.textContent = Math.ceil(stats.baseHealth);
 
-        // Low health warning
-        if (healthPercent < 30) {
+        // Player health
+        if (this.playerHealthBar && stats.playerMaxHealth) {
+            const pPct = (stats.playerHealth / stats.playerMaxHealth) * 100;
+            this.playerHealthBar.style.width = `${pPct}%`;
+            if (this.playerHealthText) this.playerHealthText.textContent = Math.ceil(stats.playerHealth);
+        }
+
+        // Weapon name + ammo
+        if (this.weaponName && stats.weaponName) this.weaponName.textContent = stats.weaponName;
+        if (this.ammoCount && stats.ammo !== undefined) {
+            this.ammoCount.textContent = (stats.ammo === Infinity) ? '∞' : stats.ammo;
+        }
+
+        // Low health warning — triggers on whichever of tower/player is critical.
+        const playerPct = stats.playerMaxHealth ? (stats.playerHealth / stats.playerMaxHealth) * 100 : 100;
+        if (healthPercent < 30 || playerPct < 30) {
             document.body.classList.add('low-health');
         } else {
             document.body.classList.remove('low-health');
@@ -171,12 +196,44 @@ class UIManager {
         // Enemy count
         this.enemyCount.textContent = stats.enemiesAlive;
 
+        // Coins
+        if (this.coinCount && stats.coins !== undefined) {
+            this.coinCount.textContent = stats.coins;
+        }
+
+        // Build panel (iso view) — affordability + slot usage.
+        if (stats.build && this.buildPanel) {
+            const b = stats.build;
+            if (this.buildCost) this.buildCost.textContent = `${b.cost}`;
+            if (this.buildSlots) this.buildSlots.textContent = `${b.used}/${b.allowed}`;
+            if (this.buildHint) {
+                let msg, color;
+                if (b.used >= b.allowed) { msg = `Turret limit reached — survive to wave ${(b.used) * 2 + 1} for another slot`; color = '#ff7a4a'; }
+                else if (b.coins < b.cost) { msg = `Need ${b.cost - b.coins} more coins — switch to FPS [TAB] and collect`; color = '#ff7a4a'; }
+                else { msg = 'Click a green spot to build a turret'; color = '#8effa6'; }
+                this.buildHint.textContent = msg;
+                this.buildHint.style.color = color;
+            }
+        }
+
+        // Persistent control hint reflecting the current view.
+        if (this.viewHint) {
+            this.viewHint.textContent = stats.viewMode === 'iso'
+                ? '[TAB] Return to FPS'
+                : '[TAB] Build View';
+        }
+
         // Wave status indicator
         if (!stats.isWaveActive && stats.wave > 0 && stats.wave < stats.maxWaves) {
             if (stats.timeUntilNextWave > 0) {
                 this.showWaveMessage(`Wave ${stats.wave + 1} in ${Math.ceil(stats.timeUntilNextWave)}...`);
             }
         }
+    }
+
+    /** Show/hide the iso-view turret build panel. */
+    setBuildPanelVisible(visible) {
+        if (this.buildPanel) this.buildPanel.classList.toggle('hidden', !visible);
     }
 
     /**

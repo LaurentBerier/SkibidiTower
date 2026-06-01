@@ -27,12 +27,17 @@
             <div class="instructions">
                 <h3>CONTROLS</h3>
                 <ul>
-                    <li><strong>WASD</strong> - Move on tower top</li>
+                    <li><strong>WASD</strong> - Move</li>
                     <li><strong>MOUSE</strong> - Look around</li>
                     <li><strong>LEFT CLICK</strong> - Shoot</li>
+                    <li><strong>RIGHT CLICK</strong> - Aim (ADS)</li>
+                    <li><strong>SHIFT</strong> - Sprint &nbsp;|&nbsp; <strong>SPACE</strong> - Jump</li>
+                    <li><strong>Q</strong> - Dash &nbsp;|&nbsp; <strong>R</strong> - Reload</li>
+                    <li><strong>1-4 / WHEEL</strong> - Switch weapon</li>
+                    <li><strong>TAB</strong> - Build view (place auto-turrets)</li>
                     <li><strong>ESC</strong> - Pause</li>
                 </ul>
-                <p style="margin-top: 10px; font-size: 0.9em; color: #FFD700;">Defend the tower from above!</p>
+                <p style="margin-top: 10px; font-size: 0.9em; color: #FFD700;">Kill Skibidi for coins, then switch to the top-down Build View [TAB] to spend them on auto-turrets. Defend the keep &mdash; and stay alive!</p>
             </div>
         </div>
     </div>
@@ -45,7 +50,14 @@
         <!-- Top HUD -->
         <div id="top-hud">
             <div class="hud-section">
-                <div class="label">BASE HEALTH</div>
+                <div class="label">PLAYER</div>
+                <div class="health-bar-container">
+                    <div id="player-health-bar" class="health-bar player"></div>
+                </div>
+                <div id="player-health-text" class="value">100</div>
+            </div>
+            <div class="hud-section">
+                <div class="label">TOWER</div>
                 <div class="health-bar-container">
                     <div id="base-health-bar" class="health-bar"></div>
                 </div>
@@ -56,10 +68,17 @@
                 <div id="wave-number" class="value large">1</div>
             </div>
             <div class="hud-section">
-                <div class="label">AMMO</div>
+                <div class="label" id="weapon-name">FRANKEN-GUN</div>
                 <div id="ammo-count" class="value">∞</div>
             </div>
+            <div class="hud-section">
+                <div class="label">COINS</div>
+                <div id="coin-count" class="value coins">0</div>
+            </div>
         </div>
+
+        <!-- Player damage vignette -->
+        <div id="damage-overlay" class="hidden"></div>
 
         <!-- Crosshair -->
         <div id="crosshair">
@@ -73,6 +92,18 @@
             <div id="enemy-counter" class="hud-message">
                 Enemies: <span id="enemy-count">0</span>
             </div>
+        </div>
+
+        <!-- View toggle hint -->
+        <div id="view-hint">[TAB] Build View</div>
+
+        <!-- Build panel (shown in top-down build view) -->
+        <div id="build-panel" class="hidden">
+            <h3>OVERWATCH — BUILD TURRETS</h3>
+            <div class="build-row">Turret cost: <span id="build-cost">45</span> <span class="coin-ic">●</span></div>
+            <div class="build-row">Slots: <span id="build-slots">0/1</span></div>
+            <div id="build-hint">Click a green spot to build a turret</div>
+            <div class="build-foot">Turrets auto-fire. Coins are collected on foot — press [TAB] to drop into FPS and grab them.</div>
         </div>
     </div>
 
@@ -111,14 +142,27 @@
         </div>
     </div>
 
-    <!-- Scripts - Load Three.js first, then our modules -->
+    <!-- Scripts - Load Three.js + loaders first, then our modules -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
-    <script src="js/levelLoader.js?v=16"></script>
-    <script src="js/scene.js?v=16"></script>
-    <script src="js/gameObjects.js?v=16"></script>
-    <script src="js/gameLogic.js?v=16"></script>
-    <script src="js/ui.js?v=16"></script>
-    <script src="js/game.js?v=16"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/DRACOLoader.js"></script>
+    <!-- Preetham atmospheric sky (threejs.org/examples/#webgl_shaders_sky) -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/objects/Sky.js"></script>
+    <script src="js/levelLoader.js?v=18"></script>
+    <!-- Lens flare (Mancini/ektogamat, CC0) ported from Polliniate3 -->
+    <script src="js/lensFlare.js?v=18"></script>
+    <script src="js/scene.js?v=20"></script>
+    <script src="js/gameObjects.js?v=23"></script>
+    <script src="js/gameLogic.js?v=18"></script>
+    <script src="js/ui.js?v=18"></script>
+    <!-- ZombieBlaster port: visuals, effects, weapon assets, controller, arsenal -->
+    <script src="js/zb/zbVisuals.js?v=18"></script>
+    <script src="js/zb/zbEffects.js?v=18"></script>
+    <script src="js/zb/zbAssets.js?v=18"></script>
+    <script src="js/zb/fpsController.js?v=18"></script>
+    <script src="js/zb/zbWeapons.js?v=18"></script>
+    <!-- Tower-defense layer: turrets, coins, iso build view -->
+    <script src="js/td/towerDefense.js?v=19"></script>
+    <script src="js/game.js?v=23"></script>
 </body>
 </html>

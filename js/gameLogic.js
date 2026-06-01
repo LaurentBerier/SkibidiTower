@@ -31,13 +31,21 @@ class GameLogic {
 
         // Enemy management
         this.enemies = [];
-        this.maxActiveEnemies = 20;
+        this.maxActiveEnemies = 32;
 
-        // Spawn positions (around arena perimeter)
-        this.spawnRadius = 18;
+        // Enemies now pour in from ALL directions around the field. Spawn just
+        // inside the rim so they're visible marching in. Scales with the arena.
+        const arenaSize = (levelData && levelData.arena && levelData.arena.size) || 80;
+        this.spawnRadius = arenaSize / 2 - 3;
+
+        // Optional hook: called once per enemy death (any cause). game.js uses
+        // it to drop a collectable coin at the death position.
+        this.onEnemyKilled = null;
 
         // Stats
         this.totalKills = 0;
+        this.score = 0; // drives ported weapon evolution tiers
+        this.acidTickTimer = 0;
 
         // Visual effects
         this.effects = [];
@@ -57,7 +65,9 @@ class GameLogic {
         const sceneObject = this.scene.getScene();
         if (sceneObject) {
             sceneObject.traverse((child) => {
-                if (child.isMesh) {
+                // Skip shader-driven meshes (sky dome + the full-screen lens-flare
+                // quad at the origin) — they're backdrop, not bullet colliders.
+                if (child.isMesh && !(child.material && child.material.isShaderMaterial)) {
                     geometry.push(child);
                 }
             });
@@ -83,8 +93,10 @@ class GameLogic {
         this.waveActive = true;
 
         // Authored config wins; otherwise fall back to progressive curve.
+        // Steeper ramp (≈ wave 1: 7 → wave 10: 33) so each level brings notably
+        // more Skibidi than your turret line can fully cover on its own.
         const cfg = this.waveConfig[this.currentWave - 1];
-        this.enemiesInWave = cfg?.enemyCount ?? Math.floor(5 + this.currentWave * 2);
+        this.enemiesInWave = cfg?.enemyCount ?? Math.round(5 + this.currentWave * 2.8);
         this.spawnInterval = cfg?.spawnInterval ?? this.spawnInterval;
         this.enemiesSpawned = 0;
         this.lastSpawnTime = Date.now() / 1000;
@@ -99,22 +111,28 @@ class GameLogic {
         if (this.enemies.length >= this.maxActiveEnemies) return;
         if (this.enemiesSpawned >= this.enemiesInWave) return;
 
-        let spawnPos;
-        if (this.enemySpawns.length > 0) {
-            // Pick a random designer-placed spawn point.
-            const s = this.enemySpawns[Math.floor(Math.random() * this.enemySpawns.length)];
-            spawnPos = new THREE.Vector3(s.x, 0, s.z);
-        } else {
-            // Fallback: random angle around the legacy perimeter radius.
-            const angle = Math.random() * Math.PI * 2;
-            spawnPos = new THREE.Vector3(
-                Math.cos(angle) * this.spawnRadius,
-                0,
-                Math.sin(angle) * this.spawnRadius
-            );
-        }
+        // Spawn from a random direction anywhere around the field, with a bit
+        // of radius jitter so they don't form a perfect ring.
+        const angle = Math.random() * Math.PI * 2;
+        const radius = this.spawnRadius - Math.random() * 4;
+        const spawnPos = new THREE.Vector3(
+            Math.cos(angle) * radius,
+            0,
+            Math.sin(angle) * radius
+        );
 
         const enemy = new Enemy(this.scene, spawnPos, this.base.position);
+
+        // Difficulty ramp: each wave the horde is tougher and a touch faster,
+        // so the threat keeps outgrowing your slowly-expanding turret line.
+        const w = this.currentWave;
+        const hpScale = 1 + (w - 1) * 0.14;
+        const speedScale = Math.min(1.6, 1 + (w - 1) * 0.035);
+        enemy.maxHealth = Math.round(enemy.maxHealth * hpScale);
+        enemy.health = enemy.maxHealth;
+        enemy.baseSpeed *= speedScale;
+        enemy.speed = enemy.baseSpeed;
+
         this.enemies.push(enemy);
         this.enemiesSpawned++;
         this.enemiesAlive++;
@@ -217,7 +235,7 @@ class GameLogic {
     /**
      * Update game logic
      */
-    update(deltaTime) {
+    update(deltaTime, ctx = {}) {
         const currentTime = Date.now() / 1000;
 
         // Update base
@@ -243,6 +261,17 @@ class GameLogic {
             const enemy = this.enemies[i];
 
             if (!enemy.isAlive) {
+                // Central kill accounting — covers both projectile kills and
+                // damage-over-time (burn/corrode) kills, so score/kills stay
+                // consistent regardless of how the enemy died.
+                if (!enemy._killCounted) {
+                    enemy._killCounted = true;
+                    this.totalKills++;
+                    this.enemiesAlive--;
+                    this.score += enemy.scoreValue;
+                    // Drop a coin the player can collect on foot (FPS view).
+                    if (this.onEnemyKilled) this.onEnemyKilled(enemy);
+                }
                 this.enemies.splice(i, 1);
                 continue;
             }
@@ -268,7 +297,23 @@ class GameLogic {
                     this.effects.push(attackEffect);
                 }
             }
+
+            // Enemies also claw the player when they get close enough (ported
+            // survival mechanic — player now has health).
+            if (ctx.playerPosition && ctx.onPlayerAttacked) {
+                const dx = enemy.position.x - ctx.playerPosition.x;
+                const dz = enemy.position.z - ctx.playerPosition.z;
+                const reach = (enemy.hitRadius ?? 0.7) + 0.6;
+                if (dx * dx + dz * dz <= reach * reach && enemy.canAttackPlayer(currentTime)) {
+                    enemy.attackPlayer(currentTime);
+                    ctx.onPlayerAttacked(enemy.damage);
+                }
+            }
         }
+
+        // Acid-pool damage ticks: enemies standing in an active Soda-Laser pool
+        // take dps over time (ported from ZombieBlaster's applyAcidPoolTicks).
+        this.updateAcidPools(deltaTime);
 
         // Update visual effects
         for (let i = this.effects.length - 1; i >= 0; i--) {
@@ -298,6 +343,30 @@ class GameLogic {
     }
 
     /**
+     * Tick acid pools left by the Soda Laser. Any enemy inside an active pool
+     * takes dps * interval damage with the corrode status refreshed.
+     */
+    updateAcidPools(deltaTime) {
+        if (typeof ZBEffects === 'undefined' || !ZBEffects.getActiveAcidPools) return;
+        const TICK = 0.25;
+        const pools = ZBEffects.getActiveAcidPools();
+        if (pools.length === 0) return;
+        pools.forEach(pool => {
+            if (pool.tickTimer < TICK) return;
+            pool.tickTimer = 0;
+            const r2 = pool.radius * pool.radius;
+            this.enemies.forEach(enemy => {
+                if (!enemy.isAlive) return;
+                const dx = enemy.position.x - pool.position.x;
+                const dz = enemy.position.z - pool.position.z;
+                if (dx * dx + dz * dz > r2) return;
+                enemy.applyStatus('corrode', 0.6, 0);
+                enemy.takeDamage(pool.dps * TICK, true);
+            });
+        });
+    }
+
+    /**
      * Check win condition
      */
     hasWon() {
@@ -322,6 +391,7 @@ class GameLogic {
             maxBaseHealth: this.base.maxHealth,
             enemiesAlive: this.enemiesAlive,
             totalKills: this.totalKills,
+            score: this.score,
             isWaveActive: this.waveActive,
             timeUntilNextWave: this.waveActive ? 0 : Math.max(0, this.nextWaveTime - Date.now() / 1000)
         };
@@ -357,6 +427,7 @@ class GameLogic {
 
         // Reset stats
         this.totalKills = 0;
+        this.score = 0;
 
         // Reset base
         this.base.health = this.base.maxHealth;

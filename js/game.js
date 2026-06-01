@@ -1,6 +1,11 @@
 /**
  * game.js - Main Game Controller
- * Coordinates all game systems and handles the main game loop
+ * Coordinates all game systems and handles the main game loop.
+ *
+ * Locomotion and weapons are provided by the ZombieBlaster port: the
+ * FPSController (jump/dash/sprint/ADS/bob + player health) and the WeaponSystem
+ * (4-weapon arsenal with projectiles, switching, reload, evolution) drive the
+ * player, while the existing GameLogic keeps the wave/enemy/base simulation.
  */
 
 class Game {
@@ -12,27 +17,26 @@ class Game {
 
         // Game objects
         this.base = null;
-        this.weapon = null;
+        this.enemyTower = null;
 
-        // Player state - on tower top with movement. The defaults match the
-        // original level layout; startGame() overwrites them from levelData.
-        this.towerTopHeight = 8.2; // 6.5 (tower) + 1.7 (eye level)
-        this.towerTopRadius = 2.0; // Safe movement radius on tower top
-        this.playerSpawn = new THREE.Vector3(0, this.towerTopHeight, 0);
-        this.playerPosition = this.playerSpawn.clone();
-        this.playerVelocity = new THREE.Vector3();
-        this.playerSpeed = 3; // Reduced speed for tower top
-        this.mouseSensitivity = 0.002;
-        this.pitch = 0;
-        this.yaw = 0;
+        // Ported player + weapon systems
+        this.controller = null;
+        this.weapons = null;
 
-        // Input state
-        this.keys = {};
-        this.mouseMovement = { x: 0, y: 0 };
-        this.isPointerLocked = false;
+        // Tower-defense layer (turrets, coins, iso build view)
+        this.turretSystem = null;
+        this.coinSystem = null;
+        this.buildController = null;
+        this.economy = { coins: 0 };
+        this.viewMode = 'fps'; // 'fps' | 'iso'
+
+        // Player spawn (overwritten from levelData in initialize()).
+        this.playerHeight = 1.7;
+        this.arenaHalfSize = 18;
+        this.playerSpawn = new THREE.Vector3(0, this.playerHeight, 9);
 
         // Game state
-        this.gameState = 'loading'; // loading, menu, playing, paused, gameover, victory
+        this.gameState = 'loading';
         this.isPaused = false;
 
         // Animation
@@ -41,399 +45,489 @@ class Game {
 
         // Wave tracking
         this.lastWaveNumber = 0;
+
+        // Reusable scratch vector for knockback math (avoids per-hit allocs).
+        this._scratchDir = new THREE.Vector3();
     }
 
-    /**
-     * Initialize the game
-     */
     async initialize() {
         console.log('Initializing game...');
 
         try {
-            // Initialize UI
             this.uiManager = new UIManager();
-            this.uiManager.updateLoadingProgress(10, 'Loading UI...');
+            this.uiManager.updateLoadingProgress(8, 'Loading UI...');
 
-            // Pull the level config first so every downstream system can be
-            // built against the designer's chosen arena, base, and spawns.
-            this.uiManager.updateLoadingProgress(15, 'Loading level data...');
+            this.uiManager.updateLoadingProgress(12, 'Loading level data...');
             this.levelData = await LevelLoader.load();
 
-            // Apply spawn-derived player config
             const ps = this.levelData.playerSpawn;
             this.playerSpawn.set(ps.x, ps.y, ps.z);
-            this.towerTopHeight = ps.y;
-            this.towerTopRadius = Math.max(this.levelData.base.radius - 0.5, 0.5);
+            this.playerHeight = ps.y;
+            const arenaSize = this.levelData.arena?.size ?? 40;
+            this.arenaHalfSize = arenaSize / 2 - 1;
 
-            // Initialize scene
+            // Scene
             this.sceneManager = new SceneManager(this.levelData);
             this.sceneManager.initialize();
-            this.uiManager.updateLoadingProgress(40, 'Creating world...');
+            this.uiManager.updateLoadingProgress(20, 'Creating world...');
 
-            // Create game objects
-            this.base = new DefenseBase(this.sceneManager, this.levelData.base);
-            this.uiManager.updateLoadingProgress(55, 'Initializing defense systems...');
+            // Build the collision world shared by the controller + projectiles.
+            const b = this.levelData.base;
+            const et = this.levelData.enemyTower;
+            this.world = {
+                arenaHalfSize: this.arenaHalfSize,
+                eyeHeight: this.playerHeight,
+                groundY: 0,
+                wallHeight: this.levelData.arena?.wallHeight ?? 7,
+                towers: [
+                    { x: b.x ?? 0, z: b.z ?? 0, radius: b.radius ?? 1.8, height: b.height ?? 4.5 },
+                    { x: et.x ?? 0, z: et.z ?? -34, radius: et.radius ?? 5, height: et.height ?? 17 },
+                ],
+            };
+            this.uiManager.updateLoadingProgress(30, 'Initializing defense systems...');
 
-            // Preload enemy model before any enemies can spawn (eliminates race condition)
+            // Preload player tower, enemy castle, and Skibidi models before spawning.
             await new Promise((resolve) => {
-                this.uiManager.updateLoadingProgress(60, 'Loading enemy models...');
-                Enemy.preload(resolve);
+                this.uiManager.updateLoadingProgress(32, 'Loading defense tower...');
+                DefenseBase.preload(() => {
+                    this.uiManager.updateLoadingProgress(33, 'Loading enemy castle...');
+                    EnemyTower.preload(() => {
+                        this.uiManager.updateLoadingProgress(34, 'Loading enemy models...');
+                        Enemy.preload(resolve);
+                    });
+                });
             });
-            this.uiManager.updateLoadingProgress(75, 'Enemy models ready...');
 
-            // Create weapon
-            this.weapon = new Weapon(this.sceneManager, this.sceneManager.getCamera());
-            this.uiManager.updateLoadingProgress(80, 'Loading weapons...');
+            // Defense tower (objective) + enemy spire (spawn source)
+            this.base = new DefenseBase(this.sceneManager, this.levelData.base);
+            this.enemyTower = new EnemyTower(this.sceneManager, this.levelData.enemyTower);
 
-            // Initialize game logic
+            // Sync collision radius when the castle GLB scales proportionally from height.
+            const etEntry = this.world.towers[1];
+            if (etEntry) etEntry.radius = this.enemyTower.radius;
+
+            // Preload the (Draco-compressed) weapon GLBs. Heavy (~54 MB) but
+            // best-effort — failures fall back to procedural placeholder guns.
+            await ZBAssets.preload(({ done, total }) => {
+                const pct = 40 + (total ? (done / total) : 1) * 35;
+                this.uiManager.updateLoadingProgress(pct, `Loading arsenal... (${done}/${total})`);
+            });
+            this.uiManager.updateLoadingProgress(78, 'Arming the player...');
+
+            // First-person controller (owns movement/look/fire/aim/dash input).
+            this.controller = new FPSController(this.sceneManager, this.world);
+            this.controller.init();
+            this.controller.setInputEnabled(false);
+
+            // Weapon arsenal (attaches FP meshes to the controller's weapon holder).
+            this.weapons = new WeaponSystem(this.sceneManager, this.controller, this.world);
+            this.weapons.init();
+            this.uiManager.updateLoadingProgress(88, 'Spooling effects...');
+
+            // Pooled visual effects (particles, explosions, screen shake, etc.)
+            ZBEffects.init(this.sceneManager.getScene());
+
+            // Wave/enemy/base simulation
             this.gameLogic = new GameLogic(this.sceneManager, this.base, this.levelData);
-            this.uiManager.updateLoadingProgress(88, 'Preparing battle systems...');
+            this.uiManager.updateLoadingProgress(94, 'Preparing battle systems...');
 
-            // Setup input handlers
+            // Tower-defense layer: auto-turrets, coin drops, iso build view.
+            this.turretSystem = new TurretSystem(this.sceneManager);
+            this.coinSystem = new CoinSystem(this.sceneManager);
+            this.buildController = new BuildController(
+                this.sceneManager, this.world, this.turretSystem, this.economy, this.base);
+            // Each Skibidi death drops a coin at its position (collected on foot).
+            this.gameLogic.onEnemyKilled = (enemy) =>
+                this.coinSystem.spawn(enemy.position, TD_CONFIG.coinsPerKill);
+
+            // Shell-level input (pause, pointer lock, weapon switch)
             this.setupInputHandlers();
-            this.uiManager.updateLoadingProgress(94, 'Configuring controls...');
 
-            // Initialize UI callbacks
             this.uiManager.initialize({
                 onStartGame: () => this.startGame(),
                 onResume: () => this.resumeGame(),
                 onRestart: () => this.restartGame(),
                 onRetry: () => this.restartGame(),
-                onPlayAgain: () => this.restartGame()
+                onPlayAgain: () => this.restartGame(),
             });
 
             this.uiManager.updateLoadingProgress(100, 'Ready!');
 
-            // Show menu after brief delay
             setTimeout(() => {
                 this.gameState = 'menu';
                 this.uiManager.showMenu();
             }, 500);
 
             console.log('Game initialized successfully!');
-
         } catch (error) {
             console.error('Failed to initialize game:', error);
-            this.uiManager.updateLoadingProgress(0, 'Error: ' + error.message);
+            if (this.uiManager) this.uiManager.updateLoadingProgress(0, 'Error: ' + error.message);
         }
     }
 
-    /**
-     * Setup input event handlers
-     */
     setupInputHandlers() {
-        // Keyboard input
         document.addEventListener('keydown', (e) => this.onKeyDown(e));
-        document.addEventListener('keyup', (e) => this.onKeyUp(e));
 
-        // Mouse input
-        document.addEventListener('mousemove', (e) => this.onMouseMove(e));
-        document.addEventListener('click', (e) => this.onMouseClick(e));
+        // Click the canvas to (re)lock the pointer during play — FPS view only
+        // (iso build view keeps the cursor free for placing turrets).
+        const canvas = this.sceneManager.canvas;
+        if (canvas) {
+            canvas.addEventListener('click', () => {
+                if (this.gameState === 'playing' && !this.isPaused && this.viewMode === 'fps') {
+                    this.requestPointerLock();
+                }
+            });
+        }
 
-        // Pointer lock
+        // Tab toggles between FPS combat and the top-down build/overwatch view.
+        document.addEventListener('keydown', (e) => {
+            if (e.code !== 'Tab') return;
+            e.preventDefault();
+            if (this.gameState !== 'playing' || this.isPaused) return;
+            this.toggleView();
+        });
+
+        // Weapon switching: number keys 1-4 + scroll wheel.
+        document.addEventListener('keydown', (e) => {
+            if (this.gameState !== 'playing' || this.isPaused) return;
+            const num = parseInt(e.key, 10);
+            if (num >= 1 && num <= 4) this.weapons.switchWeapon(num - 1);
+        });
+        document.addEventListener('wheel', (e) => {
+            if (this.gameState !== 'playing' || this.isPaused || !this.weapons) return;
+            // In build/overwatch view the wheel zooms the camera (handled by
+            // BuildController), so don't also cycle weapons.
+            if (this.viewMode !== 'fps') return;
+            const dir = e.deltaY > 0 ? 1 : -1;
+            const n = this.weapons.WEAPON_DEFS.length;
+            const next = (this.weapons.weaponState.currentIndex + dir + n) % n;
+            this.weapons.switchWeapon(next);
+        });
+
         document.addEventListener('pointerlockchange', () => this.onPointerLockChange());
-
-        // Prevent context menu
-        document.addEventListener('contextmenu', (e) => e.preventDefault());
     }
 
-    /**
-     * Start the game
-     */
     startGame() {
         this.gameState = 'playing';
         this.isPaused = false;
 
-        // Position player on top of tower
-        this.playerPosition.copy(this.playerSpawn);
-        this.pitch = 0;
-        this.yaw = 0;
+        // Always begin in FPS view; clear any leftover build state.
+        if (this.viewMode === 'iso') this.buildController.exit();
+        this.sceneManager.setBuildViewMode(false);
+        for (const e of this.gameLogic.enemies) {
+            e.setOverwatchVisible(false);
+        }
+        this.viewMode = 'fps';
+        this.controller.weaponGroup.visible = true;
 
-        // Update camera
-        const camera = this.sceneManager.getCamera();
-        camera.position.copy(this.playerPosition);
-        camera.rotation.set(0, 0, 0);
+        this.controller.reset(this.playerSpawn);
+        this.weapons.reset();
+        ZBEffects.reset();
+        this.gameLogic.reset();
 
-        // Show HUD
+        // Reset tower-defense state.
+        this.turretSystem.reset();
+        this.coinSystem.reset();
+        this.economy.coins = 0;
+        this.buildController.setWave(0);
+
+        this.controller.setInputEnabled(true);
+
         this.uiManager.showHUD();
-
-        // Request pointer lock
+        this.uiManager.setBuildPanelVisible(false);
         this.requestPointerLock();
 
-        // Start game loop
         this.clock.start();
         this.lastFrameTime = this.clock.getElapsedTime();
-
-        // Reset game logic
-        this.gameLogic.reset();
 
         console.log('Game started!');
     }
 
-    /**
-     * Main game loop
-     */
+    /** Switch between FPS combat and the top-down build/overwatch view. */
+    toggleView() {
+        if (this.viewMode === 'fps') this.enterIsoView();
+        else this.enterFpsView();
+    }
+
+    enterIsoView() {
+        this.viewMode = 'iso';
+        // Stop FPS steering/firing and free the cursor for placement.
+        this.controller.setInputEnabled(false);
+        this.controller.weaponGroup.visible = false;
+        this.exitPointerLock();
+        this.sceneManager.setBuildViewMode(true);
+        for (const e of this.gameLogic.enemies) {
+            if (e.isAlive) e.setOverwatchVisible(true);
+        }
+        this.buildController.setWave(this.gameLogic.currentWave);
+        this.buildController.enter();
+        this.uiManager.setBuildPanelVisible(true);
+    }
+
+    enterFpsView() {
+        this.viewMode = 'fps';
+        this.sceneManager.setBuildViewMode(false);
+        for (const e of this.gameLogic.enemies) {
+            e.setOverwatchVisible(false);
+        }
+        this.buildController.exit();
+        this.controller.weaponGroup.visible = true;
+        this.controller.setInputEnabled(true);
+        this.uiManager.setBuildPanelVisible(false);
+        this.requestPointerLock();
+    }
+
     update() {
         requestAnimationFrame(() => this.update());
 
         const currentTime = this.clock.getElapsedTime();
-        const deltaTime = Math.min(currentTime - this.lastFrameTime, 0.1); // Cap at 100ms
+        const deltaTime = Math.min(currentTime - this.lastFrameTime, 0.1);
         this.lastFrameTime = currentTime;
 
-        // Update based on game state
         if (this.gameState === 'playing' && !this.isPaused) {
             this.updateGameplay(deltaTime);
         }
 
-        // Always render
+        // Storm dressing (rain/lightning/torches) keeps animating in every state.
+        const camera = this.sceneManager.getCamera();
+        this.sceneManager.updateEnvironment(deltaTime, camera.position);
+
+        // Render with screen-shake offset applied around the draw, then restored.
+        const shake = (typeof ZBEffects !== 'undefined') ? ZBEffects.getScreenShakeOffset() : null;
+        if (shake) camera.position.add(shake);
         this.sceneManager.render();
+        if (shake) camera.position.sub(shake);
     }
 
-    /**
-     * Update gameplay logic
-     */
     updateGameplay(deltaTime) {
-        // Update player
-        this.updatePlayer(deltaTime);
+        const enemies = this.gameLogic.enemies;
+        const isFps = this.viewMode === 'fps';
 
-        // Update weapon
-        this.weapon.update(deltaTime);
+        // 1. Player / camera. FPS: steer the player. Iso: drive the build view.
+        if (isFps) {
+            this.controller.update(deltaTime, enemies);
+        } else {
+            this.buildController.setWave(this.gameLogic.currentWave);
+            this.buildController.update(deltaTime);
+        }
 
-        // Update game logic
-        this.gameLogic.update(deltaTime);
+        // 2. Weapons — projectiles always tick; firing only happens in FPS
+        //    (controller input is disabled in iso, so keys.fire stays false).
+        this.weapons.update(deltaTime, enemies, (enemy, hitPoint, damage, weaponIndex, hitCtx) =>
+            this.onWeaponHit(enemy, hitPoint, damage, weaponIndex, hitCtx));
 
-        // Update UI
+        // 3. Wave/enemy/base sim. In iso the player is in overwatch and out of
+        //    reach, so we omit the player-attack context.
+        this.gameLogic.update(deltaTime, isFps ? {
+            playerPosition: this.controller.getPosition(),
+            onPlayerAttacked: (dmg) => this.controller.damage(dmg),
+        } : {});
+
+        // Show enemy overwatch markers for newly spawned Skibidi in build view.
+        if (!isFps) {
+            for (const e of enemies) {
+                if (e.isAlive) e.setOverwatchVisible(true);
+            }
+        }
+
+        // 3b. Turrets auto-fire in both views; coins can only be vacuumed on
+        //     foot (FPS), forcing you back into the field to fund towers.
+        this.turretSystem.update(deltaTime, enemies);
+        this.coinSystem.update(deltaTime, this.controller.getPosition(), isFps, this.economy);
+
+        // 4. Weapon evolution tracks the kill score
+        this.weapons.updateEvolution(this.gameLogic.score);
+
+        // 5. Effects + screen shake
+        ZBEffects.update(deltaTime);
+        ZBEffects.updateScreenShake(deltaTime);
+
+        // 6. Tower meshes — portal pulse + core light
+        if (this.base) this.base.update(deltaTime);
+        if (this.enemyTower) this.enemyTower.update(deltaTime);
+
+        // 7. HUD
         const stats = this.gameLogic.getStats();
-        this.uiManager.updateHUD(stats);
+        const wstats = this.weapons.getStats();
+        this.uiManager.updateHUD({
+            ...stats,
+            playerHealth: this.controller.health,
+            playerMaxHealth: this.controller.maxHealth,
+            weaponName: wstats.weaponName,
+            weaponIndex: wstats.weaponIndex,
+            ammo: wstats.ammo,
+            dashReady: this.controller.dashCooldownRatio <= 0,
+            coins: this.economy.coins,
+            viewMode: this.viewMode,
+            build: this.buildController.status(),
+        });
 
-        // Check for wave changes
         if (stats.wave > this.lastWaveNumber) {
             this.uiManager.showWaveStart(stats.wave);
             this.lastWaveNumber = stats.wave;
         }
 
-        // Check win/lose conditions
+        // 8. Win / lose
         if (this.gameLogic.hasWon()) {
             this.endGame(true);
-        } else if (this.gameLogic.hasLost()) {
+        } else if (this.gameLogic.hasLost() || !this.controller.isAlive) {
             this.endGame(false);
         }
     }
 
-    /**
-     * Update player movement (constrained to tower top)
-     */
-    updatePlayer(deltaTime) {
-        const camera = this.sceneManager.getCamera();
+    onWeaponHit(enemy, hitPoint, damage, weaponIndex, hitContext = {}) {
+        const weapon = this.weapons.WEAPON_DEFS[weaponIndex];
+        const fx = weapon.fx || {};
+        const hitColor = weapon.projectileColor || weapon.color;
 
-        // Calculate movement direction
-        const moveDirection = new THREE.Vector3();
+        // Knockback direction: away from player, or radial for splash hits.
+        this._scratchDir.copy(this.controller.getForward()).setY(0);
+        if (hitContext.fromSplash && hitContext.splashCenter) {
+            this._scratchDir.copy(enemy.position).sub(hitContext.splashCenter).setY(0);
+        }
+        if (this._scratchDir.lengthSq() < 0.0001) this._scratchDir.set(0, 0, 1);
+        this._scratchDir.normalize();
 
-        if (this.keys['w'] || this.keys['W']) moveDirection.z += 1;
-        if (this.keys['s'] || this.keys['S']) moveDirection.z -= 1;
-        if (this.keys['a'] || this.keys['A']) moveDirection.x -= 1;
-        if (this.keys['d'] || this.keys['D']) moveDirection.x += 1;
+        const knockbackStrength = hitContext.fromSplash ? (fx.knockback || 0) * 0.6 : (fx.knockback || 0);
+        enemy.applyKnockback(this._scratchDir, knockbackStrength);
+        if (fx.status) enemy.applyStatus(fx.status.type, fx.status.duration, fx.status.dps);
+        enemy.lastWeaponIndex = weaponIndex;
 
-        // Normalize movement
-        if (moveDirection.length() > 0) {
-            moveDirection.normalize();
+        const wasAlive = enemy.isAlive;
+        enemy.takeDamage(damage);
+        const killed = wasAlive && !enemy.isAlive;
 
-            // Apply camera rotation to movement
-            const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
-            const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+        // Hit feedback
+        this.uiManager.showHitMarker();
 
-            forward.y = 0;
-            right.y = 0;
-            forward.normalize();
-            right.normalize();
-
-            this.playerVelocity.x = (forward.x * moveDirection.z + right.x * moveDirection.x) * this.playerSpeed;
-            this.playerVelocity.z = (forward.z * moveDirection.z + right.z * moveDirection.x) * this.playerSpeed;
-        } else {
-            // Deceleration
-            this.playerVelocity.x *= 0.8;
-            this.playerVelocity.z *= 0.8;
+        const particleCount = fx.hitParticles ?? 6;
+        if (particleCount > 0) {
+            ZBEffects.spawnHitParticles(hitPoint, hitColor, killed ? particleCount + 6 : particleCount);
         }
 
-        // Calculate new position
-        const newPosition = this.playerPosition.clone();
-        newPosition.x += this.playerVelocity.x * deltaTime;
-        newPosition.z += this.playerVelocity.z * deltaTime;
-
-        // Keep at tower top height
-        newPosition.y = this.towerTopHeight;
-
-        // Constrain to tower top radius (prevent falling off). Centre on the
-        // base's x/z so a designer-moved tower still keeps the player on top.
-        const baseX = this.base?.position?.x ?? 0;
-        const baseZ = this.base?.position?.z ?? 0;
-        const dx = newPosition.x - baseX;
-        const dz = newPosition.z - baseZ;
-        const distanceFromCenter = Math.sqrt(dx * dx + dz * dz);
-
-        if (distanceFromCenter > this.towerTopRadius) {
-            const angle = Math.atan2(dz, dx);
-            newPosition.x = baseX + Math.cos(angle) * this.towerTopRadius;
-            newPosition.z = baseZ + Math.sin(angle) * this.towerTopRadius;
-
-            // Stop velocity when hitting edge
-            this.playerVelocity.x = 0;
-            this.playerVelocity.z = 0;
+        if (!hitContext.fromSplash || killed) {
+            const headPos = enemy.position.clone().setY(2.0);
+            const isCrit = damage >= enemy.maxHealth * 0.5;
+            ZBEffects.spawnDamageNumber(headPos, damage, isCrit);
         }
 
-        // Update player position
-        this.playerPosition.copy(newPosition);
+        const shake = killed ? (fx.killShake || fx.shake) : fx.shake;
+        if (shake && !hitContext.fromSplash) {
+            ZBEffects.triggerScreenShake(shake.amp, shake.duration);
+        }
 
-        // Update camera position
-        camera.position.copy(this.playerPosition);
+        if (killed) {
+            ZBEffects.spawnDeathSplat(hitPoint);
+            ZBEffects.spawnPopup(enemy.position.clone().setY(2.0), true);
+        }
 
-        // Update camera rotation from mouse
-        this.pitch = THREE.MathUtils.clamp(this.pitch, -Math.PI / 2, Math.PI / 2);
-        camera.rotation.order = 'YXZ';
-        camera.rotation.x = this.pitch;
-        camera.rotation.y = this.yaw;
-    }
-
-    /**
-     * Handle shooting
-     */
-    handleShooting() {
-        if (this.gameState !== 'playing' || this.isPaused) return;
-
-        const camera = this.sceneManager.getCamera();
-        const hitEnemy = this.gameLogic.shoot(camera, this.weapon);
-
-        if (hitEnemy) {
-            this.uiManager.showHitMarker();
+        // Primary-impact splash effects (skip for AoE victims to avoid stacking).
+        if (!hitContext.fromSplash) {
+            if (fx.splash === 'explosion') {
+                ZBEffects.spawnExplosion(hitPoint, fx.explosionRadius || weapon.aoeRadius || 3.0, hitColor);
+            } else if (fx.splash === 'liquid') {
+                ZBEffects.spawnLiquidSplash(hitPoint, hitColor, fx.splashCount || 8);
+                if (fx.acidPoolChance && Math.random() < fx.acidPoolChance) {
+                    ZBEffects.spawnAcidPool(hitPoint, fx.acidPoolRadius || 1.2, fx.acidPoolDuration || 2.0, hitColor, fx.acidPoolDps || 5);
+                }
+            }
         }
     }
 
-    /**
-     * End the game
-     */
+    // Drop out of the iso build view back to a clean FPS state (no pointer
+    // lock). Used by pause / game-over so menu clicks can't place turrets.
+    _leaveBuildView() {
+        if (this.viewMode !== 'iso') return;
+        this.buildController.exit();
+        this.sceneManager.setBuildViewMode(false);
+        for (const e of this.gameLogic.enemies) {
+            e.setOverwatchVisible(false);
+        }
+        this.viewMode = 'fps';
+        this.controller.weaponGroup.visible = true;
+        this.uiManager.setBuildPanelVisible(false);
+    }
+
     endGame(victory) {
         this.gameState = victory ? 'victory' : 'gameover';
+        this._leaveBuildView();
+        this.controller.setInputEnabled(false);
         this.exitPointerLock();
 
         const stats = this.gameLogic.getStats();
-
         if (victory) {
             this.uiManager.showVictory(stats);
         } else {
+            // Tailor the defeat message to what actually killed the run.
+            const msgEl = document.getElementById('gameover-message');
+            if (msgEl) {
+                msgEl.textContent = !this.controller.isAlive
+                    ? 'You were overrun by the Skibidi horde!'
+                    : 'The tower has been destroyed!';
+            }
             this.uiManager.showGameOver(stats);
         }
 
         console.log(victory ? 'Victory!' : 'Game Over');
     }
 
-    /**
-     * Restart the game
-     */
     restartGame() {
         this.lastWaveNumber = 0;
         this.startGame();
     }
 
-    /**
-     * Pause the game
-     */
     pauseGame() {
         if (this.gameState !== 'playing') return;
-
         this.isPaused = true;
+        // Snap back to FPS so the build view can't be driven while paused.
+        this._leaveBuildView();
+        this.controller.setInputEnabled(false);
         this.exitPointerLock();
         this.uiManager.showPause();
     }
 
-    /**
-     * Resume the game
-     */
     resumeGame() {
         if (this.gameState !== 'playing') return;
-
         this.isPaused = false;
+        this.controller.setInputEnabled(true);
         this.uiManager.hidePause();
-        this.requestPointerLock();
+        this.requestPointerLock(); // always FPS after pause
     }
 
-    /**
-     * Request pointer lock
-     */
     requestPointerLock() {
         const canvas = this.sceneManager.canvas;
         canvas.requestPointerLock = canvas.requestPointerLock ||
-                                     canvas.mozRequestPointerLock ||
-                                     canvas.webkitRequestPointerLock;
+            canvas.mozRequestPointerLock || canvas.webkitRequestPointerLock;
         if (canvas.requestPointerLock) {
-            canvas.requestPointerLock();
+            try { canvas.requestPointerLock(); } catch (e) { /* needs user gesture */ }
         }
     }
 
-    /**
-     * Exit pointer lock
-     */
     exitPointerLock() {
         document.exitPointerLock = document.exitPointerLock ||
-                                   document.mozExitPointerLock ||
-                                   document.webkitExitPointerLock;
-        if (document.exitPointerLock) {
-            document.exitPointerLock();
-        }
+            document.mozExitPointerLock || document.webkitExitPointerLock;
+        if (document.exitPointerLock) document.exitPointerLock();
     }
-
-    /**
-     * Event Handlers
-     */
 
     onKeyDown(event) {
-        this.keys[event.key] = true;
-
-        // ESC to pause
         if (event.key === 'Escape' && this.gameState === 'playing') {
-            if (this.isPaused) {
-                this.resumeGame();
-            } else {
-                this.pauseGame();
-            }
-        }
-    }
-
-    onKeyUp(event) {
-        this.keys[event.key] = false;
-    }
-
-    onMouseMove(event) {
-        if (!this.isPointerLocked) return;
-
-        const movementX = event.movementX || event.mozMovementX || event.webkitMovementX || 0;
-        const movementY = event.movementY || event.mozMovementY || event.webkitMovementY || 0;
-
-        this.yaw -= movementX * this.mouseSensitivity;
-        this.pitch -= movementY * this.mouseSensitivity;
-    }
-
-    onMouseClick(event) {
-        if (this.gameState === 'playing' && !this.isPaused && this.isPointerLocked) {
-            this.handleShooting();
+            if (this.isPaused) this.resumeGame();
+            else this.pauseGame();
         }
     }
 
     onPointerLockChange() {
-        this.isPointerLocked = document.pointerLockElement === this.sceneManager.canvas ||
-                              document.mozPointerLockElement === this.sceneManager.canvas ||
-                              document.webkitPointerLockElement === this.sceneManager.canvas;
-
-        console.log('Pointer lock:', this.isPointerLocked);
+        const locked = document.pointerLockElement === this.sceneManager.canvas;
+        // Pausing the game pops the pointer lock; that's expected. Nothing else
+        // to do — the controller tracks lock state for mouse-look itself.
+        console.log('Pointer lock:', locked);
     }
 }
 
 // Initialize and start the game when page loads
 window.addEventListener('DOMContentLoaded', () => {
     console.log('DOM loaded, creating game...');
-
     const game = new Game();
-    game.initialize().then(() => {
-        // Start the game loop
-        game.update();
-    });
+    window.game = game; // exposed for debugging / automated checks
+    game.initialize().then(() => game.update());
 });
